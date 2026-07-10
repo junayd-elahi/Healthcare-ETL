@@ -1,0 +1,24 @@
+sources:
+  - name: synthea
+    database: HEALTHCARE
+    schema: RAW
+    tables:
+      - name: ALLERGIES
+      - name: CAREPLANS
+      - name: CLAIMS
+      - name: CLAIMS_TRANSACTIONS
+      - name: CONDITIONS
+      - name: DEVICES
+      - name: ENCOUNTERS
+      - name: IMAGING_STUDIES
+      - name: IMMUNIZATIONS
+      - name: MEDICATIONS
+      - name: OBSERVATIONS
+      - name: ORGANIZATIONS
+      - name: PATIENTS
+      - name: PAYERS
+      - name: PAYER_TRANSITIONS
+      - name: PROCEDURES
+      - name: PROVIDERS
+      - name: SUPPLIES
+
