@@ -44,8 +44,6 @@ def load_csv(connection, csv_path):
 
 def main():
     connection = get_connection()
-    cur = connection.cursor()
-    print(cur.execute("SELECT CURRENT_DATABASE(), CURRENT_SCHEMA(), CURRENT_ROLE(), CURRENT_WAREHOUSE()").fetchone())
     for csv_path in sorted(CSV_DIR.glob("*.csv")):
         load_csv(connection, csv_path)
     connection.close()
