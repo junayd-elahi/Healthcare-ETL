@@ -19,6 +19,11 @@ with DAG(
     tags=["dbt", "snowflake"],
 ) as dag:
 
+    load_raw = BashOperator(
+        task_id="load_raw",
+        bash_command="pip install snowflake-connector-python pandas python-dotenv && cd /opt/ingestion && python load_raw.py",
+    )
+
     dbt_deps = BashOperator(
         task_id="dbt_deps",
         bash_command="cd /opt/dbt && dbt deps",
@@ -29,4 +34,4 @@ with DAG(
         bash_command="cd /opt/dbt && dbt build --target dev",
     )
 
-    dbt_deps >> dbt_build
+    load_raw >> dbt_deps >> dbt_build

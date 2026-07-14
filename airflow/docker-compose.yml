@@ -19,10 +19,13 @@ services:
       SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
       SNOWFLAKE_USER: ${SNOWFLAKE_USER}
       DBT_PRIVATE_KEY_PATH: /opt/keys/rsa_key.p8
+      CSV_DIR: /opt/csv
     volumes:
       - ./dags:/opt/airflow/dags
       - ../healthcare_dbt:/opt/dbt
       - ../rsa_key.p8:/opt/keys/rsa_key.p8:ro
+      - ../ingestion:/opt/ingestion
+      - ../output/csv:/opt/csv
     ports:
       - "8080:8080"
     command: >
