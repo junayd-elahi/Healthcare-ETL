@@ -36,4 +36,5 @@ models:
       - name: encounter_class
         tests:
           - accepted_values:
-              values: ['ambulatory', 'emergency', 'hospice', 'home', 'inpatient', 'outpatient', 'snf', 'urgentcare', 'virtual', 'wellness']
+              arguments:
+                values: ['ambulatory', 'emergency', 'hospice', 'home', 'inpatient', 'outpatient', 'snf', 'urgentcare', 'virtual', 'wellness']
