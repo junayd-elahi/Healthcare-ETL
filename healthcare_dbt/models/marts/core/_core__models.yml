@@ -42,6 +42,14 @@ models:
           - unique
           - not_null
 
+  - name: dim_medication_codes
+    description: "One row per distinct medication code."
+    columns:
+      - name: medication_code_sk
+        tests:
+          - unique
+          - not_null
+
   - name: fct_encounters
     description: "One row per clinical encounter."
     columns:
@@ -84,3 +92,28 @@ models:
               arguments:
                 to: ref('dim_encounter_codes')
                 field: encounter_code_sk
+
+  - name: fct_medications
+    description: "One row per medication prescribed. No natural primary key exists in the source."
+    columns:
+      - name: patient_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_patients')
+                field: patient_sk
+      - name: payer_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_payers')
+                field: payer_sk
+      - name: medication_code_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_medication_codes')
+                field: medication_code_sk
