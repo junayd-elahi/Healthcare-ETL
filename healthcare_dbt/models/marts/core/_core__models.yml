@@ -1,0 +1,86 @@
+version: 2
+
+models:
+  - name: dim_patients
+    description: "One row per patient."
+    columns:
+      - name: patient_sk
+        description: "Surrogate key."
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_payers
+    description: "One row per payer."
+    columns:
+      - name: payer_sk
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_providers
+    description: "One row per provider."
+    columns:
+      - name: provider_sk
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_organizations
+    description: "One row per organization."
+    columns:
+      - name: organization_sk
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_encounter_codes
+    description: "One row per distinct encounter code."
+    columns:
+      - name: encounter_code_sk
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_encounters
+    description: "One row per clinical encounter."
+    columns:
+      - name: encounter_id
+        tests:
+          - unique
+          - not_null
+      - name: patient_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_patients')
+                field: patient_sk
+      - name: payer_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_payers')
+                field: payer_sk
+      - name: provider_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_providers')
+                field: provider_sk
+      - name: organization_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_organizations')
+                field: organization_sk
+      - name: encounter_code_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_encounter_codes')
+                field: encounter_code_sk
