@@ -1,8 +1,8 @@
 # Healthcare ELT Pipeline
 
-An ELT pipeline built on [Synthea](https://synthetichealth.github.io/synthea/) synthetic patient data, modelling clinical encounters into a dimensional warehouse with automated data quality testing and CI.
+An end-to-end ELT pipeline built on [Synthea](https://synthetichealth.github.io/synthea/) synthetic patient data, modelling clinical encounters and medications into a dimensional warehouse with automated data quality testing, CI, and scheduled orchestration.
 
-**Stack:** Snowflake · dbt · GitHub Actions · Python
+**Stack:** Snowflake · dbt · Airflow · Docker · GitHub Actions · Python
 
 ---
 
@@ -11,46 +11,46 @@ An ELT pipeline built on [Synthea](https://synthetichealth.github.io/synthea/) s
 ```
 Synthea CSVs
      │
-     ▼
-  RAW  ──────────────  Untouched source data. Never queried directly.
+     ▼  Python loader
+  RAW  ──────────────  Untouched source data, all VARCHAR. Never queried directly.
      │
      ▼  dbt: rename + cast only
  STAGING  ───────────  18 views, 1:1 with source tables.
      │
      ▼  dbt: reshape for analysis
-  MARTS  ────────────  Star schema. 6 tables.
+  MARTS  ────────────  Dimensional model. 2 facts, 6 dimensions.
 ```
 
-**RAW**: The landing zone. Nothing writes to it, nothing changes it. It's the thing every downstream error can be rebuilt from.
+Three layers, each with exactly one job.
 
-**STAGING**: One view per source table. Columns renamed to a consistent convention and cast to correct types. No business logic, no joins, no null handling. Materialised as **views** because they're cheap, always fresh, and never queried by end users.
+**RAW** is the landing zone. Every column is `VARCHAR`. Nothing writes to it, nothing changes it, and it enforces no types. A malformed value in a future source file should land in RAW and fail a test downstream, not crash the ingestion at 3am.
 
-**MARTS**: The analyst-facing product. The source's shape is replaced with a shape built for questions. Materialised as **tables**: compute once at build time, fast reads forever.
+**STAGING** is one view per source table. Columns renamed to a consistent convention and cast to correct types. No business logic, no joins, no null handling. Materialised as **views** because they are cheap, always fresh, and never queried by end users.
+
+**MARTS** is the analyst-facing product. The source's shape is replaced with a shape built for questions. Materialised as **tables**: compute once at build time, fast reads forever.
 
 ---
 
-## The star schema
+## The dimensional model
 
-```
-                    dim_patients
-                         │
-  dim_payers ────── fct_encounters ────── dim_providers
-                    ╱         ╲
-     dim_encounter_codes    dim_organizations
-```
+Two fact tables sharing **conformed dimensions**.
 
 | Model | Grain | Rows |
 |---|---|---|
 | `fct_encounters` | one row per clinical encounter | 79,142 |
+| `fct_medications` | one row per medication prescribed | 78,009 |
 | `dim_patients` | one row per patient | 1,229 |
 | `dim_providers` | one row per provider | 840 |
 | `dim_organizations` | one row per organization | 840 |
+| `dim_medication_codes` | one row per distinct medication code | 262 |
 | `dim_encounter_codes` | one row per distinct encounter code | 56 |
 | `dim_payers` | one row per payer | 10 |
 
-The "fact" table holds **measures** (costs) and **foreign keys**. The dimensions hold **attributes**, the things that are noramlly filtered and grouped by.
+Fact tables hold **measures** (costs, quantities) and **foreign keys**. Dimensions hold **attributes**, the things you filter and group by.
 
 The test that decides which is which: *would you `SUM()` it, or `GROUP BY` it?*
+
+`dim_patients` and `dim_payers` are **conformed**: both facts point at the same rows. That is what makes "total spend per patient across encounters and medications" a question that reconciles, rather than one that produces two numbers nobody trusts.
 
 ---
 
@@ -64,9 +64,9 @@ Synthea mixes temporal precision. Some columns are date-only (`2016-02-20`); oth
 |---|---|
 | allergies, conditions, supplies, careplans | encounters, medications, procedures, observations, immunizations, devices, imaging studies, payer transitions, claims |
 
-Casting a date-only value to a timestamp invents a `00:00:00` that doesn't exist in the source. Downstream, "unknown time" becomes indistinguishable from "actually midnight," and any duration calculated against a real timestamp is silently wrong by up to a day.
+Casting a date-only value to a timestamp invents a `00:00:00` that does not exist in the source. Downstream, "unknown time" becomes indistinguishable from "actually midnight," and any duration calculated against a real timestamp is silently wrong by up to a day.
 
-**Column names must not lie about their type.** `_date` for `DATE`, `_timestamp` for `TIMESTAMP_TZ`. A column called `encounter_date` invites an analyst to `GROUP BY` it expecting one row per day; if it's secretly a timestamp, they get one row per second.
+**Column names must not lie about their type.** `_date` for `DATE`, `_timestamp` for `TIMESTAMP_TZ`. A column called `encounter_date` invites an analyst to `GROUP BY` it expecting one row per day; if it is secretly a timestamp, they get one row per second.
 
 ### Money as `DECIMAL`, not `FLOAT`
 
@@ -76,19 +76,21 @@ Binary floating point cannot represent decimal cents exactly. Aggregate enough o
 
 SNOMED and RxNorm codes look numeric but are identifiers, not quantities. You never do arithmetic on them, and casting to a number risks stripping leading zeros.
 
-### `dim_encounter_codes` earned a table; `encounter_class` didn't
+### Code dimensions earned their tables; `encounter_class` did not
 
-`code` and `description` were repeated across all 79,142 encounter rows, but there are only **56 distinct codes**. Promoting them to a dimension:
+`code` and `description` were repeated across all 79,142 encounter rows, but there are only **56 distinct codes**. Same story for medications: 78,009 rows, 262 codes. Promoting them to dimensions:
 
-- deduplicates a long description string stored ~1,400 times over
-- creates a single source of truth for the code → description mapping, enforced by a `unique` test
+- deduplicates a long description string stored hundreds of times over
+- creates a single source of truth for the code to description mapping, enforced by a `unique` test
 - gives future code attributes (category, chargeable flag) somewhere to live
 
-`encounter_class` has 10 short values, no description to deduplicate, and no attributes to hang off it. It stays on the fact table as a **degenerate dimension** which is a dimensional attribute that lives on the fact because promoting it would buy nothing.
+`encounter_class` has 10 short values, no description to deduplicate, and no attributes to hang off it. It stays on the fact table as a **degenerate dimension**: a dimensional attribute that lives on the fact because promoting it would buy nothing.
+
+`fct_medications` carries `encounter_id` as a degenerate dimension rather than joining to an encounter dimension. A conformed `dim_encounters` was considered and rejected: its descriptive attributes are already reachable from `fct_encounters`, and facts should not join to facts.
 
 ### Surrogate keys
 
-The fact table joins to dimensions on hashed surrogate keys (`dbt_utils.generate_surrogate_key`), not natural keys.
+Fact tables join to dimensions on hashed surrogate keys (`dbt_utils.generate_surrogate_key`), not natural keys.
 
 A fact row points at a *row in a dimension*, not at a real-world entity. Today those are the same thing. Once slowly-changing dimensions are added, in the event of something like a patient moving city, the old dim row is kept and a new one added. That means one `patient_id` maps to two dim rows, and only the surrogate key can tell them apart.
 
@@ -96,15 +98,15 @@ The keys are **deterministic hashes**, not auto-increment integers, because mode
 
 ### `LEFT JOIN`, never `INNER JOIN`
 
-An inner join would silently *drop* any encounter whose payer didn't exist in `dim_payers`. The row count would just be quietly smaller and nothing would say so.
+An inner join would silently *drop* any encounter whose payer did not exist in `dim_payers`. The row count would just be quietly smaller and nothing would say so.
 
-A left join keeps every encounter and leaves a `NULL` surrogate key, which the `not_null` test then catches as a build failure.
+A left join keeps every row and leaves a `NULL` surrogate key, which the `not_null` test then catches as a build failure.
 
 **A join must never be allowed to silently delete facts.**
 
 ### Dimensions hold attributes, never measures
 
-`payers.revenue`, `providers.encounters`, `organizations.utilization` were all dropped from the marts. They are pre-aggregated totals that `fct_encounters` can compute itself.
+`payers.revenue`, `providers.encounters`, `organizations.utilization` were all dropped from the marts. They are pre-aggregated totals that the fact tables can compute themselves.
 
 Storing a number someone else summed means losing the ability to slice it differently, and it creates two sources of truth that can eventually disagree.
 
@@ -114,20 +116,63 @@ Storing a number someone else summed means losing the ability to slice it differ
 
 ---
 
+## A real bug: fanout in `fct_medications`
+
+`fct_medications` first built at **85,337 rows** against a staging count of 78,009. A gain of 7,328 rows, and the build reported success, because the model had no tests yet.
+
+**Cause.** `dim_medication_codes` was built with `SELECT DISTINCT code, description`. RxNorm is inconsistent about capitalisation: `Simvastatin 20 MG Oral Tablet` and `simvastatin 20 MG Oral Tablet` are the same drug under the same code. Thirteen codes appeared with two descriptions each, so the dimension held 275 rows for 262 codes. Every medication carrying one of those codes matched two dimension rows, and the join duplicated it.
+
+**Fix.** Deduplicate on the key, not on the pair:
+
+```sql
+qualify row_number() over (
+    partition by code
+    order by description
+) = 1
+```
+
+The `order by` is not cosmetic. Without it, Snowflake picks arbitrarily and the same build could produce a different description tomorrow.
+
+**Prevention.** A `unique` test on `medication_code_sk` now fails the build if the dimension ever gains a duplicate key. That single test is the difference between catching this at build time and shipping a fact table that is 9% wrong.
+
+---
+
 ## Data quality
 
-**31 tests**, run on every build and on every pull request.
+**39 tests**, run on every build and on every pull request.
 
 | Test | What it guarantees |
 |---|---|
-| `unique` on every dimension surrogate key | **The fact table cannot fan out.** A duplicate key in a dim is what would silently turn 79,142 encounters into 200,000. |
-| `not_null` on every foreign key in the fact | **The fact table cannot have orphans.** With `LEFT JOIN`, an unmatched dimension leaves a `NULL`, and this turns that into a loud failure. |
-| `relationships` | Every surrogate key in the fact resolves to a real dimension row. Snowflake does not enforce foreign keys; this is the only thing that does. |
+| `unique` on every dimension surrogate key | **Fact tables cannot fan out.** A duplicate key in a dimension is what silently turned 78,009 medications into 85,337. |
+| `not_null` on every foreign key in a fact | **Fact tables cannot have orphans.** With `LEFT JOIN`, an unmatched dimension leaves a `NULL`, and this turns that into a loud failure. |
+| `relationships` | Every surrogate key in a fact resolves to a real dimension row. Snowflake does not enforce foreign keys; this is the only thing that does. |
 | `accepted_values` | Value domains verified against `SELECT DISTINCT` on the actual data, never guessed. |
 
-Together, these mean **the fact table cannot gain or lose rows without the build going red.**
+Together, these mean **a fact table cannot gain or lose rows without the build going red.**
 
 Every model is built with `dbt build`, never `dbt run`. `build` interleaves running and testing, so a model that fails its tests blocks its children from being built on bad data.
+
+### A known gap
+
+`fct_medications` has no `unique` test on a primary key, because **Synthea's medications table has no primary key**. Neither do allergies, conditions, procedures, observations, devices, supplies, or immunizations. There is no natural key and no reliable composite one. This is documented rather than papered over with a synthetic key that would give false confidence.
+
+---
+
+## Orchestration
+
+An Airflow DAG (`airflow/dags/dbt_pipeline.py`) runs the pipeline end to end on a daily schedule, in Docker:
+
+```
+load_raw  →  dbt deps  →  dbt build
+```
+
+If the load fails, dbt never runs.
+
+**Airflow calls dbt; it does not replace it.** dbt already knows the dependency order of all 26 models. Exploding each model into its own Airflow task would duplicate that graph and leave two dependency graphs to maintain. Airflow's job is scheduling, retries, and alerting.
+
+`catchup=False` is set deliberately. Airflow's default is to backfill every missed interval since `start_date` the moment it boots, which is a fast way to burn warehouse credits on runs nobody asked for.
+
+**Known shortcut:** Python dependencies are pip-installed inside the task rather than baked into the image. In production this belongs in a custom Dockerfile with a `requirements.txt`.
 
 ---
 
@@ -146,27 +191,38 @@ Every model is built with `dbt build`, never `dbt run`. `build` interleaves runn
 1. Fresh Ubuntu container
 2. `pip install dbt-snowflake`
 3. `dbt deps`
-4. `dbt build --target ci`, covering all 24 models and all 31 tests, against a dedicated `CI_*` schema isolated from dev
+4. `dbt build --target ci`, covering all 26 models and all 39 tests, against a dedicated `CI_*` schema isolated from dev
 
 A non-zero exit blocks the merge. The tests are not advisory; they are a gate.
+
+On its first run, CI caught a hyphenated package name in `packages.yml` that a locally cached `dbt_packages/` folder had been masking.
 
 ---
 
 ## Running it locally
 
 ```bash
-cd healthcare_dbt
+# Load raw data
+cd ingestion
+python load_raw.py
+
+# Build and test the warehouse
+cd ../healthcare_dbt
 dbt deps
 dbt build
+
+# Or run the whole thing on a schedule
+cd ../airflow
+docker compose up
 ```
 
-Requires `DBT_PRIVATE_KEY_PATH` set to the path of your Snowflake private key.
+Requires `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `DBT_PRIVATE_KEY_PATH`, and `CSV_DIR` in a `.env` at the repo root.
 
 ---
 
 ## Roadmap
 
-- [ ] **Orchestration**: Airflow/Dagster DAG wrapping the dbt build on a schedule
-- [ ] **Ingestion**: Python loader for Synthea CSVs into `RAW`, replacing the manual load
-- [ ] **Slim CI**: `state:modified+` so PRs rebuild only what changed and its downstream children
-- [ ] **Slowly-changing dimensions**: Type 2 history on `payer_transitions`, so a 2016 claim attributes to the payer the patient had *then*
+- [ ] **More fact tables.** Procedures, observations, conditions, and immunizations are all event tables with staging models built and no facts yet. Each is a new star on the existing conformed dimensions.
+- [ ] **Slowly-changing dimensions.** Type 2 history on `payer_transitions`, so a 2016 claim attributes to the payer the patient had *then*, not the one they have now.
+- [ ] **Slim CI.** `state:modified+` so pull requests rebuild only what changed and its downstream children.
+- [ ] **Bake dependencies into the Airflow image** rather than pip-installing per task.
