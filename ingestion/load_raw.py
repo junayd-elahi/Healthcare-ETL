@@ -17,14 +17,14 @@ CSV_DIR = Path(csv_dir)
 def get_connection():
         account=os.getenv("SNOWFLAKE_ACCOUNT")
         user=os.getenv("SNOWFLAKE_USER")
-        private_key_file = os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH")
+        private_key_file = os.getenv("DBT_PRIVATE_KEY_PATH")
 
         if not account:
             raise ValueError("SNOWFLAKE_ACCOUNT must be set")
         if not user:
             raise ValueError("SNOWFLAKE_USER must be set")
         if not private_key_file:
-            raise ValueError("SNOWFLAKE_PRIVATE_KEY_PATH must be set")
+            raise ValueError("DBT_PRIVATE_KEY_PATH must be set")
 
 
         return snowflake.connector.connect(
@@ -44,9 +44,12 @@ def load_csv(connection, csv_path):
 
 def main():
     connection = get_connection()
-    for csv_path in sorted(CSV_DIR.glob("*.csv")):
-        load_csv(connection, csv_path)
-    connection.close()
+    try:
+        for csv_path in sorted(CSV_DIR.glob("*.csv")):
+            load_csv(connection, csv_path)
+    finally:
+        connection.close()
+
 
 if __name__ == "__main__":
     main()
