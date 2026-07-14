@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  airflow:
+    image: apache/airflow:2.10.5-python3.11
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER}
+      DBT_PRIVATE_KEY_PATH: /opt/keys/rsa_key.p8
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ../healthcare_dbt:/opt/dbt
+      - ../rsa_key.p8:/opt/keys/rsa_key.p8:ro
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "
+      pip install dbt-snowflake==1.11.6 &&
+      airflow db migrate &&
+      airflow users create --username admin --password admin --firstname a --lastname b --role Admin --email a@b.com &&
+      airflow standalone
+      "
+
+volumes:
+  postgres-data:
