@@ -20,6 +20,7 @@ Synthea CSVs
      ▼  dbt: reshape for analysis
   MARTS  ────────────  Dimensional model. 2 facts, 6 dimensions.
 ```
+![Lineage graph](docs/etl healthcare graph.png)
 
 Three layers, each with exactly one job.
 
