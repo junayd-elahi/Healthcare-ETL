@@ -38,8 +38,15 @@ def get_connection():
 
 def load_csv(connection, csv_path):
     df = pd.read_csv(csv_path, dtype=str)
+    df = df.astype(object).where(df.notna(), None)
     table_name = csv_path.stem.upper()
-    write_pandas(connection, df, table_name, auto_create_table=True, overwrite=True)
+
+    columns = ", ".join(f'"{col}" VARCHAR' for col in df.columns)
+    cursor = connection.cursor()
+    cursor.execute(f'CREATE OR REPLACE TABLE {table_name} ({columns})')
+    cursor.close()
+
+    write_pandas(connection, df, table_name, quote_identifiers=True)
     print(f"{table_name}: {len(df)} rows loaded")
 
 def main():
