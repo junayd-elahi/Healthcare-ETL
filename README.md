@@ -1,5 +1,9 @@
 # Healthcare ELT Pipeline
 
+
+(Live warehouse decommissioned after the free trial. Clone and point profiles.yml at your own Snowflake to run.)
+
+
 An end-to-end ELT pipeline built on [Synthea](https://synthetichealth.github.io/synthea/) synthetic patient data, modelling clinical encounters and medications into a dimensional warehouse with automated data quality testing, CI, and scheduled orchestration.
 
 **Stack:** Snowflake · dbt · Airflow · Docker · GitHub Actions · Python
